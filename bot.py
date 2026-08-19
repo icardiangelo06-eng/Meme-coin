@@ -230,7 +230,8 @@ def scan_once():
 def main():
     print("Meme Coin Signal Bot")
     print(f"MC={MIN_MC:,.0f}-{MAX_MC:,.0f} | min liq={MIN_LIQ:,.0f} | scan={SCAN_SECONDS}s")
-    print("Signal-only mode: NO automatic trade execution.")
+    print("Signal-only mode: NO automatic trade execution.") 
+    discord_alert("✅ Spidey Bot connected to Discord")
     while True:
         try:
             scan_once()
