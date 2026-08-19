@@ -33,6 +33,10 @@ MAX_AGE_HOURS = float(os.getenv("MAX_AGE_HOURS", "24"))
 MIN_SCORE = int(os.getenv("MIN_SCORE", "70"))
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "")
+BIRDEYE_API_KEY = os.getenv("BIRDEYE_API_KEY", "")
+BIRDEYE_BASE = "https://public-api.birdeye.so"
+
+
 
 seen_alerts = {}
 
@@ -40,6 +44,46 @@ def get_json(url):
     r = requests.get(url, timeout=12, headers={"User-Agent": "meme-signal-bot/1.0"})
     r.raise_for_status()
     return r.json()
+    
+    def birdeye_get(path, params=None):
+
+    if not BIRDEYE_API_KEY:
+
+        return None
+
+    headers = {
+
+        "X-API-KEY": BIRDEYE_API_KEY,
+
+        "x-chain": "solana",
+
+        "accept": "application/json",
+
+    }
+
+    try:
+
+        r = requests.get(
+
+            f"{BIRDEYE_BASE}{path}",
+
+            headers=headers,
+
+            params=params or {},
+
+            timeout=15,
+
+        )
+
+        r.raise_for_status()
+
+        return r.json()
+
+    except Exception as e:
+
+        print("birdeye error:", e)
+
+        return None
 
 def candidate_addresses():
     out = []
