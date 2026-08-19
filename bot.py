@@ -44,46 +44,31 @@ def get_json(url):
     r = requests.get(url, timeout=12, headers={"User-Agent": "meme-signal-bot/1.0"})
     r.raise_for_status()
     return r.json()
-    
-    def birdeye_get(path, params=None):
 
+
+def birdeye_get(path, params=None):
     if not BIRDEYE_API_KEY:
-
         return None
 
     headers = {
-
         "X-API-KEY": BIRDEYE_API_KEY,
-
         "x-chain": "solana",
-
         "accept": "application/json",
-
     }
 
     try:
-
         r = requests.get(
-
             f"{BIRDEYE_BASE}{path}",
-
             headers=headers,
-
             params=params or {},
-
             timeout=15,
-
         )
-
         r.raise_for_status()
-
         return r.json()
-
     except Exception as e:
-
         print("birdeye error:", e)
-
         return None
+
 
 def candidate_addresses():
     out = []
