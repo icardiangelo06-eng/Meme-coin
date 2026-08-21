@@ -187,39 +187,159 @@ def fmt_money(v):
     if v >= 1_000: return f"${v/1_000:.1f}K"
     return f"${v:.0f}"
 
+def entry_status(ch5, ch1, vol5m, vol1h, buys5m, sells5m):
+    accel = (vol5m * 12 / vol1h) if vol1h > 0 else 0
+
+    if ch5 >= 35 or ch1 >= 120:
+        return "🔴 DO NOT CHASE"
+
+    if ch5 >= 20 or ch1 >= 75:
+        return "🟠 EXTENDED"
+
+    if accel >= 1.5 and buys5m > sells5m * 1.2:
+        return "🟢 EARLY"
+
+    return "🟡 MOVING"
+
+
 def signal_text(p, ca, score, reasons, flags):
     base = p.get("baseToken") or {}
     sym = base.get("symbol") or "?"
+
     mc = num(p.get("marketCap") or p.get("fdv"))
     liq = num((p.get("liquidity") or {}).get("usd"))
-    vol1h = num((p.get("volume") or {}).get("h1"))
-    tx1h = (p.get("txns") or {}).get("h1") or {}
-    ch5 = num((p.get("priceChange") or {}).get("m5"))
-    ch1 = num((p.get("priceChange") or {}).get("h1"))
-    tier = "🔥 STRONG WATCH" if score >= 82 else "👀 WATCH"
-    return (
-        f"{tier} ${sym} | score {score}/100\n"
-        f"MC {fmt_money(mc)} | Liq {fmt_money(liq)} | 1H Vol {fmt_money(vol1h)}\n"
-        f"1H buys/sells {tx1h.get('buys',0)}/{tx1h.get('sells',0)} | "
-        f"5m {ch5:+.1f}% | 1h {ch1:+.1f}%\n"
-        f"CA: {ca}\n"
-        f"Why: {', '.join(reasons[:5]) or 'n/a'}\n"
-        f"Flags: {', '.join(flags) if flags else 'none from basic market-data checks'}\n"
-        f"{p.get('url','')}"
+
+    volume = p.get("volume") or {}
+    vol5m = num(volume.get("m5"))
+    vol1h = num(volume.get("h1"))
+
+    txns = p.get("txns") or {}
+    tx5m = txns.get("m5") or {}
+    tx1h = txns.get("h1") or {}
+
+    buys5m = int(tx5m.get("buys") or 0)
+    sells5m = int(tx5m.get("sells") or 0)
+
+    buys1h = int(tx1h.get("buys") or 0)
+    sells1h = int(tx1h.get("sells") or 0)
+
+    pc = p.get("priceChange") or {}
+    ch5 = num(pc.get("m5"))
+    ch1 = num(pc.get("h1"))
+
+    age = age_hours(p)
+
+    volume_accel = (vol5m * 12 / vol1h) if vol1h > 0 else 0
+
+    if score >= 90:
+        tier = "🚨 EXTREME ALERT"
+    elif score >= 82:
+        tier = "🔥 HIGH ALERT"
+    else:
+        tier = "⚡ WATCH"
+
+    status = entry_status(
+        ch5,
+        ch1,
+        vol5m,
+        vol1h,
+        buys5m,
+        sells5m,
     )
+
+    clean_flags = ", ".join(flags) if flags else "No basic market-data flags"
+    why = ", ".join(reasons[:6]) if reasons else "Momentum conditions met"
+
+    embed = {
+        "title": f"{tier} — ${sym}",
+        "description": f"**{status}**\nScore: **{score}/100**",
+        "color": (
+            15158332 if score >= 90
+            else 16753920 if score >= 82
+            else 5763719
+        ),
+        "fields": [
+            {
+                "name": "💰 MARKET",
+                "value": (
+                    f"**MC:** {fmt_money(mc)}\n"
+                    f"**Liquidity:** {fmt_money(liq)}\n"
+                    f"**Age:** {age:.1f}h"
+                ),
+                "inline": True,
+            },
+            {
+                "name": "📊 VOLUME",
+                "value": (
+                    f"**5m:** {fmt_money(vol5m)}\n"
+                    f"**1h:** {fmt_money(vol1h)}\n"
+                    f"**Acceleration:** {volume_accel:.2f}x"
+                ),
+                "inline": True,
+            },
+            {
+                "name": "🚀 MOMENTUM",
+                "value": (
+                    f"**5m:** {ch5:+.1f}%\n"
+                    f"**1h:** {ch1:+.1f}%"
+                ),
+                "inline": True,
+            },
+            {
+                "name": "🟢 BUY / SELL FLOW",
+                "value": (
+                    f"**5m:** {buys5m} buys / {sells5m} sells\n"
+                    f"**1h:** {buys1h} buys / {sells1h} sells"
+                ),
+                "inline": False,
+            },
+            {
+                "name": "🧠 WHY IT TRIGGERED",
+                "value": why,
+                "inline": False,
+            },
+            {
+                "name": "⚠️ RED FLAGS",
+                "value": clean_flags,
+                "inline": False,
+            },
+            {
+                "name": "📋 CONTRACT ADDRESS",
+                "value": f"```{ca}```",
+                "inline": False,
+            },
+        ],
+        "footer": {
+            "text": "Spidey Meme Scanner • Signal only"
+        },
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+    if p.get("url"):
+        embed["url"] = p.get("url")
+
+    return {
+        "content": f"**${sym} • {status}**",
+        "embeds": [embed],
+    }
+
 
 def discord_alert(msg):
     if not DISCORD_WEBHOOK_URL:
         return
+
     try:
+        payload = msg if isinstance(msg, dict) else {"content": str(msg)}
+
         requests.post(
             DISCORD_WEBHOOK_URL,
-            json={"content": msg},
+            json=payload,
             timeout=10,
         ).raise_for_status()
+
     except Exception as e:
         print("discord error:", e)
-
+        
 def should_alert(ca, score):
     now = time.time()
     prev = seen_alerts.get(ca)
