@@ -372,7 +372,7 @@ def scan_once():
 
     for score, ca, p, reasons, flags in ranked[:8]:
         msg = signal_text(p, ca, score, reasons, flags)
-        print("\n" + msg)
+        print("\n" + json.dumps(msg, indent=2, ensure_ascii=False))
         if should_alert(ca, score):
             discord_alert(msg)
 
