@@ -31,6 +31,13 @@ MIN_VOL_1H = float(os.getenv("MIN_VOL_1H", "5000"))
 MIN_BUYS_1H = int(os.getenv("MIN_BUYS_1H", "25"))
 MAX_AGE_HOURS = float(os.getenv("MAX_AGE_HOURS", "24"))
 MIN_SCORE = int(os.getenv("MIN_SCORE", "70"))
+EARLY_MIN_MC = float(os.getenv("EARLY_MIN_MC", "5000"))
+EARLY_MAX_MC = float(os.getenv("EARLY_MAX_MC", "75000"))
+EARLY_MIN_LIQ = float(os.getenv("EARLY_MIN_LIQ", "1500"))
+EARLY_MIN_VOL_5M = float(os.getenv("EARLY_MIN_VOL_5M", "800"))
+EARLY_MIN_BUYS_5M = int(os.getenv("EARLY_MIN_BUYS_5M", "8"))
+EARLY_MAX_AGE_HOURS = float(os.getenv("EARLY_MAX_AGE_HOURS", "6"))
+EARLY_MIN_SCORE = int(os.getenv("EARLY_MIN_SCORE", "58"))
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "")
 BIRDEYE_API_KEY = os.getenv("BIRDEYE_API_KEY", "")
@@ -168,6 +175,124 @@ def score_pair(p):
 
     return max(0, min(100, score)), reasons, flags
 
+def early_score_pair(p):
+    liq = num((p.get("liquidity") or {}).get("usd"))
+    mc = num(p.get("marketCap") or p.get("fdv"))
+
+    volume = p.get("volume") or {}
+    vol5m = num(volume.get("m5"))
+    vol1h = num(volume.get("h1"))
+
+    txns = p.get("txns") or {}
+    tx5m = txns.get("m5") or {}
+    buys5m = int(tx5m.get("buys") or 0)
+    sells5m = int(tx5m.get("sells") or 0)
+
+    pc = p.get("priceChange") or {}
+    ch5 = num(pc.get("m5"))
+    ch1 = num(pc.get("h1"))
+    age = age_hours(p)
+
+    score = 0
+    reasons = []
+    flags = []
+
+    volume_accel = (vol5m * 12 / vol1h) if vol1h > 0 else 0
+    liq_ratio = (liq / mc) if mc > 0 else 0
+
+    if EARLY_MIN_MC <= mc <= EARLY_MAX_MC:
+        score += 18
+        reasons.append("early market cap")
+
+    if age <= 1:
+        score += 12
+        reasons.append("very fresh")
+    elif age <= EARLY_MAX_AGE_HOURS:
+        score += 7
+        reasons.append("fresh")
+
+    if liq >= EARLY_MIN_LIQ:
+        score += 10
+        reasons.append("usable early liquidity")
+
+    if 0.08 <= liq_ratio <= 0.60:
+        score += 8
+        reasons.append("healthy liquidity ratio")
+
+    if vol5m >= EARLY_MIN_VOL_5M:
+        score += 12
+        reasons.append("5m volume waking up")
+
+    if volume_accel >= 2.0:
+        score += 15
+        reasons.append("strong volume acceleration")
+    elif volume_accel >= 1.3:
+        score += 9
+        reasons.append("volume accelerating")
+
+    if buys5m >= EARLY_MIN_BUYS_5M:
+        score += 8
+        reasons.append("active 5m buyers")
+
+    if buys5m > sells5m * 1.35 and buys5m >= 8:
+        score += 12
+        reasons.append("5m buy pressure")
+    elif buys5m > sells5m:
+        score += 5
+        reasons.append("buyers leading")
+
+    if 1 <= ch5 <= 12:
+        score += 10
+        reasons.append("early positive momentum")
+    elif 12 < ch5 <= 22:
+        score += 5
+        reasons.append("momentum building")
+
+    if ch5 < -10:
+        score -= 15
+        flags.append("5m trend weak")
+
+    if ch1 < -20:
+        score -= 18
+        flags.append("1h trend heavily negative")
+    elif ch1 < -10:
+        score -= 10
+        flags.append("1h trend negative")
+
+    if ch5 > 30:
+        score -= 20
+        flags.append("already pumping")
+
+    if ch1 > 100:
+        score -= 15
+        flags.append("1h move already extended")
+
+    if sells5m > buys5m * 1.4 and sells5m >= 8:
+        score -= 15
+        flags.append("5m sellers taking control")
+
+    if liq < EARLY_MIN_LIQ:
+        score -= 20
+        flags.append("very thin liquidity")
+
+    return max(0, min(100, score)), reasons, flags
+
+
+def early_qualifies(p):
+    mc = num(p.get("marketCap") or p.get("fdv"))
+    liq = num((p.get("liquidity") or {}).get("usd"))
+    volume = p.get("volume") or {}
+    vol5m = num(volume.get("m5"))
+    tx5m = ((p.get("txns") or {}).get("m5") or {})
+    buys5m = int(tx5m.get("buys") or 0)
+
+    return (
+        EARLY_MIN_MC <= mc <= EARLY_MAX_MC
+        and liq >= EARLY_MIN_LIQ
+        and vol5m >= EARLY_MIN_VOL_5M
+        and buys5m >= EARLY_MIN_BUYS_5M
+        and age_hours(p) <= EARLY_MAX_AGE_HOURS
+    )
 def qualifies(p):
     mc = num(p.get("marketCap") or p.get("fdv"))
     liq = num((p.get("liquidity") or {}).get("usd"))
@@ -349,33 +474,66 @@ def should_alert(ca, score):
     seen_alerts[ca] = {"time": now, "score": score}
     return True
 
-def scan_once():
+  def scan_once():
     addrs = candidate_addresses()
     print(f"\n[{datetime.now().strftime('%H:%M:%S')}] candidates={len(addrs)}")
+
     ranked = []
+
     for ca in addrs[:80]:
         try:
             p = best_pair(token_pairs(ca))
+
             if not p:
                 continue
+
+            # Normal signal
             score, reasons, flags = score_pair(p)
+
             if qualifies(p) and score >= MIN_SCORE:
-                ranked.append((score, ca, p, reasons, flags))
+                ranked.append(
+                    (score, ca, p, reasons, flags, "normal")
+                )
+
+            # Early signal — catches coins before the larger move
+            early_score, early_reasons, early_flags = early_score_pair(p)
+
+            if early_qualifies(p) and early_score >= EARLY_MIN_SCORE:
+                ranked.append(
+                    (early_score, ca, p, early_reasons, early_flags, "early")
+                )
+
             time.sleep(0.08)
+
         except Exception as e:
             print("token error:", ca, e)
 
     ranked.sort(key=lambda x: x[0], reverse=True)
+
     if not ranked:
         print("No signals passed filters.")
         return
 
-    for score, ca, p, reasons, flags in ranked[:8]:
-        msg = signal_text(p, ca, score, reasons, flags)
-        print("\n" + json.dumps(msg, indent=2, ensure_ascii=False))
+    sent = set()
+
+    for score, ca, p, reasons, flags, signal_type in ranked[:12]:
+
+        # Prevent the same contract being sent twice in one scan
+        if ca in sent:
+            continue
+
+        sent.add(ca)
+
+        msg = signal_text(
+            p,
+            ca,
+            score,
+            reasons,
+            flags
+        )
+
         if should_alert(ca, score):
             discord_alert(msg)
-
 def main():
     print("Meme Coin Signal Bot")
     print(f"MC={MIN_MC:,.0f}-{MAX_MC:,.0f} | min liq={MIN_LIQ:,.0f} | scan={SCAN_SECONDS}s")
