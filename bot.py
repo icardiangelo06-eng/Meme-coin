@@ -319,7 +319,7 @@ def signal_text(p, ca, score, reasons, flags):
         embed["url"] = p.get("url")
 
     return {
-        "content": f"**${sym} • {status}**",
+        "content": ca,
         "embeds": [embed],
     }
 
