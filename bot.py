@@ -474,7 +474,7 @@ def should_alert(ca, score):
     seen_alerts[ca] = {"time": now, "score": score}
     return True
 
-  def scan_once():
+def scan_once():
     addrs = candidate_addresses()
     print(f"\n[{datetime.now().strftime('%H:%M:%S')}] candidates={len(addrs)}")
 
